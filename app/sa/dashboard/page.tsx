@@ -1,5 +1,6 @@
 /* eslint-disable react-hooks/set-state-in-effect, @next/next/no-img-element */
 'use client';
+export const dynamic = 'force-dynamic';
 
 import { FormEvent, useEffect, useMemo, useState, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
