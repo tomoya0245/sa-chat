@@ -2,7 +2,14 @@
 'use client';
 export const dynamic = 'force-dynamic';
 
-import { FormEvent, useEffect, useMemo, useState, useRef } from 'react';
+import {
+  Suspense,
+  FormEvent,
+  useEffect,
+  useMemo,
+  useState,
+  useRef,
+} from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 
@@ -57,7 +64,8 @@ type ThreadLock = {
   locked_at: string | null;
 };
 
-export default function SaDashboardPage() {
+// ← ここから中身全部を SaDashboardInner に入れる
+function SaDashboardInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -76,7 +84,8 @@ export default function SaDashboardPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [calls, setCalls] = useState<Call[]>([]);
   const [replyText, setReplyText] = useState('');
-  const [replyAttachmentFile, setReplyAttachmentFile] = useState<File | null>(null);
+  const [replyAttachmentFile, setReplyAttachmentFile] =
+    useState<File | null>(null);
   const replyFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [loading, setLoading] = useState(false);
@@ -495,9 +504,7 @@ export default function SaDashboardPage() {
           onConflict: 'course_code,client_token',
         }
       )
-      .select(
-        'course_code, client_token, sa_user_id, sa_name, locked_at'
-      )
+      .select('course_code, client_token, sa_user_id, sa_name, locked_at')
       .single<ThreadLock>();
 
     setTakingLock(false);
@@ -588,7 +595,7 @@ export default function SaDashboardPage() {
     );
   }, [calls]);
 
-    const handleSendReply = async (e: FormEvent) => {
+  const handleSendReply = async (e: FormEvent) => {
     e.preventDefault();
     if (!currentCourseCode || !selectedThreadToken) {
       showToast('返信するスレッドを選択してください');
@@ -622,7 +629,7 @@ export default function SaDashboardPage() {
       const path = `${currentCourseCode}/${selectedThreadToken}/${Date.now()}.${ext}`;
 
       const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('attachments') 
+        .from('attachments')
         .upload(path, file);
 
       if (uploadError || !uploadData) {
@@ -690,7 +697,6 @@ export default function SaDashboardPage() {
       replyFileInputRef.current.value = '';
     }
   };
-
 
   // 呼び出し「対応済み」クリック → 確認モーダル
   const handleClickMarkDone = (clientToken: string) => {
@@ -1112,7 +1118,7 @@ export default function SaDashboardPage() {
                         >
                           {mine ? 'SA / 教員' : '学生（匿名）'}
                         </div>
-                                                <div
+                        <div
                           style={{
                             padding: '8px 10px',
                             borderRadius: 14,
@@ -1157,7 +1163,6 @@ export default function SaDashboardPage() {
                             </div>
                           )}
                         </div>
-
                       </div>
                       <div
                         style={{
@@ -1186,7 +1191,7 @@ export default function SaDashboardPage() {
               )}
             </div>
 
-                        <form
+            <form
               onSubmit={handleSendReply}
               style={{
                 borderTop: '1px solid #e5e7eb',
@@ -1282,7 +1287,6 @@ export default function SaDashboardPage() {
                 送信
               </button>
             </form>
-
           </div>
 
           {/* 呼び出し一覧 */}
@@ -1492,5 +1496,41 @@ export default function SaDashboardPage() {
         </div>
       )}
     </div>
+  );
+}
+
+// ← ここが「ラッパー」＋ Suspense
+export default function SaDashboardPage() {
+  return (
+    <Suspense
+      fallback={
+        <div
+          style={{
+            margin: 0,
+            height: '100vh',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontFamily:
+              'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+          }}
+        >
+          <div
+            style={{
+              padding: 16,
+              borderRadius: 12,
+              background: '#f9fafb',
+              border: '1px solid #e5e7eb',
+              fontSize: 13,
+              color: '#6b7280',
+            }}
+          >
+            ダッシュボードを読み込み中…
+          </div>
+        </div>
+      }
+    >
+      <SaDashboardInner />
+    </Suspense>
   );
 }
