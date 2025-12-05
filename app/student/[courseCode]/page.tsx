@@ -89,7 +89,7 @@ export default function StudentCoursePage() {
     });
   };
 
-  // ★ 1) Supabase Auth で学生がログインしているかチェック
+  // Supabase Auth で学生がログインしているかチェック
   useEffect(() => {
     if (!courseCode) return;
 
@@ -128,54 +128,61 @@ export default function StudentCoursePage() {
     }
   }, []);
 
-  // メッセージ初期ロード（授業ごと）
-  useEffect(() => {
-    if (!courseCode) return;
+  // メッセージ初期ロード
+useEffect(() => {
+  if (!courseCode || !clientToken) return;   // clientToken も待つ
 
-    const run = async () => {
-      const { data, error } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('course_code', courseCode)
-        .order('created_at', { ascending: true });
+  const run = async () => {
+    const { data, error } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('course_code', courseCode)
+      .eq('client_token', clientToken)       // ★ 自分の枠だけ
+      .order('created_at', { ascending: true });
 
-      if (error) {
-        console.error(error);
-        showToast('メッセージの取得に失敗しました');
-      } else if (data) {
-        setMessages(data as Message[]);
+    if (error) {
+      console.error(error);
+      showToast('メッセージの取得に失敗しました');
+    } else if (data) {
+      setMessages(data as Message[]);
+    }
+    setLoading(false);
+  };
+
+  void run();
+}, [courseCode, clientToken]);              // ★ 依存にも clientToken を追加
+
+
+  // Realtime: メッセージ購読
+useEffect(() => {
+  if (!courseCode || !clientToken) return;
+
+  const channel = supabase
+    .channel(`messages:student:${courseCode}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: `course_code=eq.${courseCode}`,
+      },
+      (payload) => {
+        const newMsg = payload.new as Message;
+
+        // ★ 自分の clientToken 以外は無視
+        if (newMsg.client_token !== clientToken) return;
+
+        addMessageIfNotExists(newMsg);
       }
-      setLoading(false);
-    };
+    )
+    .subscribe();
 
-    void run();
-  }, [courseCode]);
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, [courseCode, clientToken]);   // ★ ここも clientToken 追加
 
-  // Realtime: メッセージ購読（この授業のメッセージ）
-  useEffect(() => {
-    if (!courseCode) return;
-
-    const channel = supabase
-      .channel(`messages:student:${courseCode}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'messages',
-          filter: `course_code=eq.${courseCode}`,
-        },
-        (payload) => {
-          const newMsg = payload.new as Message;
-          addMessageIfNotExists(newMsg);
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [courseCode]);
 
   // 学生がメッセージ一覧を見たタイミングで「既読（student側）」を更新
   useEffect(() => {

@@ -2,14 +2,8 @@
 'use client';
 export const dynamic = 'force-dynamic';
 
-import {
-  Suspense,
-  FormEvent,
-  useEffect,
-  useMemo,
-  useState,
-  useRef,
-} from 'react';
+import { Suspense } from 'react'; 
+import { FormEvent, useEffect, useMemo, useState, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 
@@ -56,6 +50,14 @@ type StudentReadRow = {
   last_read_at: string | null;
 };
 
+type ThreadReadRealtimeRow = {
+  course_code: string;
+  client_token: string;
+  reader_role: string;
+  last_read_at: string | null;
+};
+
+
 type ThreadLock = {
   course_code: string;
   client_token: string;
@@ -64,7 +66,6 @@ type ThreadLock = {
   locked_at: string | null;
 };
 
-// ← ここから中身全部を SaDashboardInner に入れる
 function SaDashboardInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -84,8 +85,9 @@ function SaDashboardInner() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [calls, setCalls] = useState<Call[]>([]);
   const [replyText, setReplyText] = useState('');
-  const [replyAttachmentFile, setReplyAttachmentFile] =
-    useState<File | null>(null);
+  const [replyAttachmentFile, setReplyAttachmentFile] = useState<File | null>(
+    null
+  );
   const replyFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [loading, setLoading] = useState(false);
@@ -118,6 +120,9 @@ function SaDashboardInner() {
     null
   );
   const [confirming, setConfirming] = useState(false);
+
+  // 匿名番号: client_token -> 匿名番号 (1,2,3,...)
+  const [aliasMap, setAliasMap] = useState<Record<string, number>>({});
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -389,31 +394,85 @@ function SaDashboardInner() {
     };
   }, [currentCourseCode]);
 
-  // 学生側の既読時刻を取得
-  useEffect(() => {
-    if (!currentCourseCode || !selectedThreadToken) {
+  // 学生側の既読時刻を「最初に一度だけ」読み込む
+useEffect(() => {
+  if (!currentCourseCode || !selectedThreadToken) {
+    setSelectedStudentReadAt(null);
+    return;
+  }
+
+  const run = async () => {
+    const { data, error } = await supabase
+      .from('thread_reads')
+      .select('last_read_at')
+      .eq('course_code', currentCourseCode)
+      .eq('client_token', selectedThreadToken)
+      .eq('reader_role', 'student')
+      .maybeSingle<StudentReadRow>();
+
+    if (error || !data) {
       setSelectedStudentReadAt(null);
       return;
     }
+    setSelectedStudentReadAt(data.last_read_at);
+  };
 
-    const run = async () => {
-      const { data, error } = await supabase
-        .from('thread_reads')
-        .select('last_read_at')
-        .eq('course_code', currentCourseCode)
-        .eq('client_token', selectedThreadToken)
-        .eq('reader_role', 'student')
-        .maybeSingle<StudentReadRow>();
+  void run();
+}, [currentCourseCode, selectedThreadToken]);
 
-      if (error || !data) {
-        setSelectedStudentReadAt(null);
-        return;
+
+// 学生側の既読（thread_reads）の変更を Realtime で受け取る
+useEffect(() => {
+  if (!currentCourseCode) return;
+
+  const channel = supabase
+    .channel(`sa-thread-reads:${currentCourseCode}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'thread_reads',
+        filter: `course_code=eq.${currentCourseCode}`,
+      },
+      (payload) => {
+        const row = payload.new as ThreadReadRealtimeRow;
+        // 今見ているスレッド & 学生側の既読だけ反映
+        if (
+          row.reader_role === 'student' &&
+          row.client_token === selectedThreadToken
+        ) {
+          setSelectedStudentReadAt(row.last_read_at);
+        }
       }
-      setSelectedStudentReadAt(data.last_read_at);
-    };
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'thread_reads',
+        filter: `course_code=eq.${currentCourseCode}`,
+      },
+      (payload) => {
+        const row = payload.new as ThreadReadRealtimeRow;
+        if (
+          row.reader_role === 'student' &&
+          row.client_token === selectedThreadToken
+        ) {
+          setSelectedStudentReadAt(row.last_read_at);
+        }
+      }
+    )
+    .subscribe();
 
-    void run();
-  }, [currentCourseCode, selectedThreadToken, messages.length]);
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, [currentCourseCode, selectedThreadToken]);
+
+
+
 
   // SA がこのスレッドを開いた → 生徒側の既読に反映
   useEffect(() => {
@@ -595,6 +654,81 @@ function SaDashboardInner() {
     );
   }, [calls]);
 
+  // ◆ 匿名番号（匿名1, 匿名2, ...）を course ごと & client_token ごとに振る
+  useEffect(() => {
+    if (!currentCourseCode) return;
+
+    // この授業で「番号を振りたい client_token」を集める
+    const targetTokens = new Set<string>();
+
+    for (const t of threads) {
+      targetTokens.add(t);
+    }
+    for (const c of calls) {
+      targetTokens.add(c.client_token);
+    }
+
+    if (targetTokens.size === 0) return;
+
+    const run = async () => {
+      // すでに付いている alias を読み込み
+      const { data, error } = await supabase
+        .from('student_aliases')
+        .select('client_token, alias_number')
+        .eq('course_code', currentCourseCode);
+
+      if (error) {
+        console.error('student_aliases fetch error', error);
+        return;
+      }
+
+      const map: Record<string, number> = {};
+      let max = 0;
+
+      for (const row of (data ?? []) as {
+        client_token: string;
+        alias_number: number;
+      }[]) {
+        map[row.client_token] = row.alias_number;
+        if (row.alias_number > max) max = row.alias_number;
+      }
+
+      // alias がまだ無い client_token にだけ新しい番号を振る
+      const inserts: {
+        course_code: string;
+        client_token: string;
+        alias_number: number;
+      }[] = [];
+
+      targetTokens.forEach((token) => {
+        if (!map[token]) {
+          max += 1;
+          map[token] = max;
+          inserts.push({
+            course_code: currentCourseCode,
+            client_token: token,
+            alias_number: max,
+          });
+        }
+      });
+
+      // 新しい alias をまとめて挿入
+      if (inserts.length > 0) {
+        const { error: insertError } = await supabase
+          .from('student_aliases')
+          .insert(inserts);
+
+        if (insertError) {
+          console.error('student_aliases insert error', insertError);
+        }
+      }
+
+      setAliasMap(map);
+    };
+
+    void run();
+  }, [currentCourseCode, threads, calls]);
+
   const handleSendReply = async (e: FormEvent) => {
     e.preventDefault();
     if (!currentCourseCode || !selectedThreadToken) {
@@ -635,7 +769,6 @@ function SaDashboardInner() {
       if (uploadError || !uploadData) {
         console.error(uploadError);
         showToast('ファイルのアップロードに失敗しました');
-        // テキストだけ送るかどうかは好みだが、ここでは中止にしておく
         return;
       }
 
@@ -899,6 +1032,11 @@ function SaDashboardInner() {
                       ? '他のSAが回答中'
                       : '';
 
+                  const aliasNumber = aliasMap[token];
+                  const displayName = aliasNumber
+                    ? `匿名${aliasNumber}`
+                    : '匿名さん';
+
                   return (
                     <button
                       key={token}
@@ -923,7 +1061,7 @@ function SaDashboardInner() {
                           marginBottom: 2,
                         }}
                       >
-                        匿名さん
+                        {displayName}
                       </div>
                       <div
                         style={{
@@ -935,7 +1073,8 @@ function SaDashboardInner() {
                         }}
                       >
                         {lastMessage
-                          ? lastMessage.body
+                          ? lastMessage.body ||
+                            (lastMessage.attachment_name ?? '（ファイル添付）')
                           : 'まだメッセージはありません'}
                       </div>
                       {lockLabel && (
@@ -1191,6 +1330,7 @@ function SaDashboardInner() {
               )}
             </div>
 
+            {/* 返信フォーム */}
             <form
               onSubmit={handleSendReply}
               style={{
@@ -1327,58 +1467,65 @@ function SaDashboardInner() {
                   現在、未対応の呼び出しはありません。
                 </div>
               ) : (
-                callGroups.map((g) => (
-                  <div
-                    key={g.clientToken}
-                    style={{
-                      borderRadius: 10,
-                      border: '1px solid #fecaca',
-                      background: '#fff',
-                      padding: '8px 10px',
-                      marginBottom: 8,
-                      fontSize: 12,
-                    }}
-                  >
+                callGroups.map((g) => {
+                  const aliasNumber = aliasMap[g.clientToken];
+                  const displayName = aliasNumber
+                    ? `匿名${aliasNumber}`
+                    : '匿名さん';
+
+                  return (
                     <div
+                      key={g.clientToken}
                       style={{
+                        borderRadius: 10,
+                        border: '1px solid #fecaca',
+                        background: '#fff',
+                        padding: '8px 10px',
+                        marginBottom: 8,
                         fontSize: 12,
-                        fontWeight: 600,
-                        color: '#7f1d1d',
-                        marginBottom: 2,
                       }}
                     >
-                      匿名さん（呼び出し {g.count} 件）
-                    </div>
-                    {g.seatNotes.length > 0 && (
                       <div
                         style={{
-                          fontSize: 11,
-                          color: '#9f1239',
-                          marginBottom: 4,
+                          fontSize: 12,
+                          fontWeight: 600,
+                          color: '#7f1d1d',
+                          marginBottom: 2,
                         }}
                       >
-                        座席メモ: {g.seatNotes.join(' / ')}
+                        {displayName}（呼び出し {g.count} 件）
                       </div>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => handleClickMarkDone(g.clientToken)}
-                      style={{
-                        marginTop: 4,
-                        borderRadius: 999,
-                        border: 'none',
-                        padding: '4px 10px',
-                        fontSize: 11,
-                        cursor: 'pointer',
-                        background: '#b91c1c',
-                        color: '#fff',
-                        fontWeight: 600,
-                      }}
-                    >
-                      対応済みにする
-                    </button>
-                  </div>
-                ))
+                      {g.seatNotes.length > 0 && (
+                        <div
+                          style={{
+                            fontSize: 11,
+                            color: '#9f1239',
+                            marginBottom: 4,
+                          }}
+                        >
+                          座席メモ: {g.seatNotes.join(' / ')}
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleClickMarkDone(g.clientToken)}
+                        style={{
+                          marginTop: 4,
+                          borderRadius: 999,
+                          border: 'none',
+                          padding: '4px 10px',
+                          fontSize: 11,
+                          cursor: 'pointer',
+                          background: '#b91c1c',
+                          color: '#fff',
+                          fontWeight: 600,
+                        }}
+                      >
+                        対応済みにする
+                      </button>
+                    </div>
+                  );
+                })
               )}
             </div>
           </div>
@@ -1498,8 +1645,6 @@ function SaDashboardInner() {
     </div>
   );
 }
-
-// ← ここが「ラッパー」＋ Suspense
 export default function SaDashboardPage() {
   return (
     <Suspense
