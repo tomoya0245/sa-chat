@@ -13,6 +13,12 @@ type Course = {
   password: string;
 };
 
+// Supabase の user_metadata 用
+type SupabaseUserMetadata = {
+  name?: string;
+  full_name?: string;
+};
+
 export default function SaCourseListPage() {
   const router = useRouter();
 
@@ -32,7 +38,82 @@ export default function SaCourseListPage() {
   const [deletingCode, setDeletingCode] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  // ログイン＆授業一覧取得
+  // ★ SA 自身の情報 & 個人設定 UI 用
+  const [saUserId, setSaUserId] = useState<string | null>(null);
+  const [saName, setSaName] = useState<string>('SA');
+  const [showSettingsPanel, setShowSettingsPanel] = useState(false);
+  const [displayNameInput, setDisplayNameInput] = useState('');
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [toast, setToast] = useState('');
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(''), 2000);
+  };
+
+  const openSettingsPanel = () => {
+    setDisplayNameInput(saName);
+    setShowSettingsPanel(true);
+  };
+
+  const closeSettingsPanel = () => {
+    // 保存中・ログアウト中は閉じない
+    if (savingProfile || loggingOut) return;
+    setShowSettingsPanel(false);
+  };
+
+  const handleSaveDisplayName = async () => {
+    if (!saUserId) {
+      showToast('ユーザー情報の取得に失敗しました');
+      return;
+    }
+
+    const name = displayNameInput.trim();
+    if (!name) {
+      showToast('表示名を入力してください');
+      return;
+    }
+
+    setSavingProfile(true);
+    const { error } = await supabase
+      .from('sa_profiles')
+      .upsert(
+        {
+          user_id: saUserId,
+          display_name: name,
+        },
+        { onConflict: 'user_id' }
+      );
+
+    setSavingProfile(false);
+
+    if (error) {
+      console.error('sa_profiles upsert error', error);
+      showToast('名前の保存に失敗しました');
+      return;
+    }
+
+    setSaName(name);
+    showToast('名前を更新しました');
+    setShowSettingsPanel(false);
+  };
+
+  const handleLogout = async () => {
+    setLoggingOut(true);
+    const { error } = await supabase.auth.signOut();
+    setLoggingOut(false);
+
+    if (error) {
+      console.error('logout error', error);
+      showToast('ログアウトに失敗しました');
+      return;
+    }
+
+    router.push('/sa/login');
+  };
+
+  // ログイン＆授業一覧取得 ＋ ログイン中ユーザー名取得
   useEffect(() => {
     const run = async () => {
       const { data: auth, error: authError } = await supabase.auth.getUser();
@@ -41,6 +122,14 @@ export default function SaCourseListPage() {
         return;
       }
 
+      // SA 基本情報
+      setSaUserId(auth.user.id);
+      const meta = (auth.user.user_metadata ?? {}) as SupabaseUserMetadata;
+      const baseName =
+        meta.name || meta.full_name || auth.user.email || 'SA';
+      setSaName(baseName);
+
+      // 授業一覧
       const { data, error: dbError } = await supabase
         .from('courses')
         .select('*')
@@ -58,6 +147,25 @@ export default function SaCourseListPage() {
 
     void run();
   }, [router]);
+
+  // sa_profiles から display_name を上書き読み込み
+  useEffect(() => {
+    if (!saUserId) return;
+
+    const run = async () => {
+      const { data, error } = await supabase
+        .from('sa_profiles')
+        .select('display_name')
+        .eq('user_id', saUserId)
+        .maybeSingle();
+
+      if (!error && data?.display_name) {
+        setSaName(data.display_name);
+      }
+    };
+
+    void run();
+  }, [saUserId]);
 
   const handleOpenCourse = (courseCode: string) => {
     router.push(`/sa/dashboard?course=${encodeURIComponent(courseCode)}`);
@@ -109,13 +217,13 @@ export default function SaCourseListPage() {
     setShowAddForm(false);
   };
 
-  // ★ 授業削除ボタン押下 → 確認モーダルを開く
+  // 授業削除ボタン押下 → 確認モーダルを開く
   const handleClickDeleteCourse = (courseCode: string) => {
     setError('');
     setDeletingCode(courseCode);
   };
 
-  // ★ 授業削除を確定
+  // 授業削除を確定
   const handleConfirmDeleteCourse = async () => {
     if (!deletingCode) return;
     setDeleting(true);
@@ -128,7 +236,7 @@ export default function SaCourseListPage() {
       await supabase.from('thread_locks').delete().eq('course_code', targetCode);
       await supabase.from('thread_reads').delete().eq('course_code', targetCode);
 
-      // courses を削除（messages / calls は ON DELETE CASCADE により一緒に消える想定）
+      // courses を削除（messages / calls は ON DELETE CASCADE の想定）
       const { error: deleteError } = await supabase
         .from('courses')
         .delete()
@@ -152,7 +260,7 @@ export default function SaCourseListPage() {
     }
   };
 
-  // ★ 削除モーダルを閉じる
+  // 削除モーダルを閉じる
   const handleCancelDeleteCourse = () => {
     if (deleting) return;
     setDeletingCode(null);
@@ -184,12 +292,13 @@ export default function SaCourseListPage() {
           gap: 16,
         }}
       >
+        {/* 上部ヘッダー：タイトル + ログイン中表示 + 個人設定 */}
         <div
           style={{
             display: 'flex',
             justifyContent: 'space-between',
             gap: 12,
-            alignItems: 'baseline',
+            alignItems: 'center',
           }}
         >
           <div>
@@ -207,23 +316,72 @@ export default function SaCourseListPage() {
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setShowAddForm((v) => !v)}
+          <div
             style={{
-              borderRadius: 999,
-              border: 'none',
-              padding: '8px 14px',
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: 'pointer',
-              background: '#111827',
-              color: '#fff',
-              whiteSpace: 'nowrap',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
             }}
           >
-            授業枠を作成
-          </button>
+            {/* 「〇〇でログイン中」部分（/sa/dashboard と同じ見た目） */}
+            <div
+              style={{
+                fontSize: 12,
+                color: '#6b7280',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {saName} でログイン中
+            </div>
+
+            {/* 個人設定ボタン（スライドパネルを開く） */}
+            <button
+              type="button"
+              onClick={openSettingsPanel}
+              style={{
+                borderRadius: 999,
+                border: '1px solid #d1d5db',
+                padding: '6px 10px',
+                fontSize: 13,
+                cursor: 'pointer',
+                background: '#f9fafb',
+                color: '#111827',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              <span>👤</span>
+              <span
+                style={{
+                  fontSize: 11,
+                  color: '#4b5563',
+                }}
+              >
+                個人設定
+              </span>
+            </button>
+
+            {/* 授業枠を作成ボタン（元のボタン） */}
+            <button
+              type="button"
+              onClick={() => setShowAddForm((v) => !v)}
+              style={{
+                borderRadius: 999,
+                border: 'none',
+                padding: '8px 14px',
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: 'pointer',
+                background: '#111827',
+                color: '#fff',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              授業枠を作成
+            </button>
+          </div>
         </div>
 
         {error && (
@@ -462,6 +620,16 @@ export default function SaCourseListPage() {
                 </button>
               </div>
             </form>
+
+            <div
+              style={{
+                marginTop: 6,
+                fontSize: 11,
+                color: '#9ca3af',
+              }}
+            >
+              ※ 学生にはセッションIDとパスワードを配布してください。
+            </div>
           </div>
         )}
 
@@ -548,7 +716,7 @@ export default function SaCourseListPage() {
                     この授業を開く
                   </button>
 
-                  {/* ★ 削除ボタン */}
+                  {/* 削除ボタン */}
                   <button
                     type="button"
                     onClick={() => handleClickDeleteCourse(course.code)}
@@ -572,7 +740,7 @@ export default function SaCourseListPage() {
         </div>
       </div>
 
-      {/* ★ 授業削除 確認モーダル */}
+      {/* 授業削除 確認モーダル */}
       {deletingCode && (
         <div
           onClick={(e) => {
@@ -615,7 +783,8 @@ export default function SaCourseListPage() {
                 lineHeight: 1.5,
               }}
             >
-              セッション <span style={{ fontWeight: 600 }}>{deletingCode}</span>{' '}
+              セッション{' '}
+              <span style={{ fontWeight: 600 }}>{deletingCode}</span>{' '}
               を削除すると、
               <br />
               この授業に紐づくチャットメッセージ・呼び出し履歴・
@@ -666,6 +835,159 @@ export default function SaCourseListPage() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* 個人設定パネル（/sa/dashboard と同じ UI） */}
+      {showSettingsPanel && (
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              closeSettingsPanel();
+            }
+          }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.2)',
+            display: 'flex',
+            justifyContent: 'flex-end',
+            zIndex: 35,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 280,
+              maxWidth: '80vw',
+              height: '100%',
+              background: '#ffffff',
+              boxShadow: '-4px 0 16px rgba(0,0,0,0.15)',
+              display: 'flex',
+              flexDirection: 'column',
+              padding: '16px 16px 12px',
+            }}
+          >
+            <div
+              style={{
+                fontSize: 15,
+                fontWeight: 600,
+                marginBottom: 12,
+              }}
+            >
+              個人設定
+            </div>
+
+            <label
+              style={{
+                fontSize: 12,
+                fontWeight: 500,
+                marginBottom: 4,
+                display: 'block',
+              }}
+            >
+              表示名（SA / 教員名）
+            </label>
+            <input
+              type="text"
+              value={displayNameInput}
+              onChange={(e) => setDisplayNameInput(e.target.value)}
+              placeholder="例: 本郷先生 / 佐藤SA など"
+              style={{
+                width: '100%',
+                borderRadius: 8,
+                border: '1px solid #d1d5db',
+                padding: '6px 8px',
+                fontSize: 13,
+                marginBottom: 10,
+              }}
+            />
+
+            <button
+              type="button"
+              onClick={handleSaveDisplayName}
+              disabled={savingProfile}
+              style={{
+                width: '100%',
+                borderRadius: 999,
+                border: 'none',
+                padding: '8px 12px',
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: savingProfile ? 'default' : 'pointer',
+                background: savingProfile ? '#9ca3af' : '#111827',
+                color: '#ffffff',
+                marginBottom: 16,
+              }}
+            >
+              {savingProfile ? '保存中…' : '保存する'}
+            </button>
+
+            <div
+              style={{
+                borderTop: '1px solid #e5e7eb',
+                margin: '8px 0 8px',
+              }}
+            />
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              disabled={loggingOut}
+              style={{
+                width: '100%',
+                borderRadius: 999,
+                border: 'none',
+                padding: '8px 12px',
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: loggingOut ? 'default' : 'pointer',
+                background: 'transparent',
+                color: '#ef4444',
+                textAlign: 'left',
+              }}
+            >
+              {loggingOut ? 'ログアウト中…' : 'ログアウトする'}
+            </button>
+
+            <button
+              type="button"
+              onClick={closeSettingsPanel}
+              style={{
+                marginTop: 'auto',
+                alignSelf: 'flex-end',
+                borderRadius: 999,
+                border: 'none',
+                padding: '6px 10px',
+                fontSize: 12,
+                cursor: 'pointer',
+                background: '#e5e7eb',
+                color: '#374151',
+              }}
+            >
+              閉じる
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* トースト（/sa/dashboard と同じ感じ） */}
+      {toast && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: 16,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: '#111827',
+            color: '#ffffff',
+            padding: '6px 12px',
+            borderRadius: 999,
+            fontSize: 12,
+            zIndex: 40,
+          }}
+        >
+          {toast}
         </div>
       )}
     </div>

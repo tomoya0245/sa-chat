@@ -23,6 +23,10 @@ export default function StudentCourseSelectPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // ★ 追加: ログイン中ユーザー名表示用
+  const [userDisplayName, setUserDisplayName] = useState<string | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
   // 初回ロード時に localStorage から授業一覧を復元
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -37,6 +41,35 @@ export default function StudentCourseSelectPage() {
       // 壊れてたら消しておく
       localStorage.removeItem(STORAGE_KEY);
     }
+  }, []);
+
+  // ★ 追加: Supabase Auth から現在ログイン中のユーザー名を取ってくる
+  useEffect(() => {
+    const run = async () => {
+      const { data, error } = await supabase.auth.getUser();
+
+      if (error || !data.user) {
+        // 未ログインなら何も表示しないだけ
+        setAuthChecked(true);
+        return;
+      }
+
+      const meta = (data.user.user_metadata ?? {}) as {
+        name?: string;
+        full_name?: string;
+      };
+
+      const displayName =
+        meta.name ||
+        meta.full_name ||
+        data.user.email ||
+        'ログイン中ユーザー';
+
+      setUserDisplayName(displayName);
+      setAuthChecked(true);
+    };
+
+    void run();
   }, []);
 
   const saveCourses = (courses: Course[]) => {
@@ -133,17 +166,46 @@ export default function StudentCourseSelectPage() {
           gap: 16,
         }}
       >
-        <div>
-          <h1 style={{ margin: '0 0 4px', fontSize: 20 }}>SAチャット – 授業選択</h1>
-          <p
-            style={{
-              margin: 0,
-              fontSize: 13,
-              color: '#6b7280',
-            }}
-          >
-            一度参加した授業は、次回からここから選ぶだけで参加できます。
-          </p>
+        {/* ★ 上部ヘッダー＋ログイン中ユーザー表示を横並びに */}
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-start',
+            gap: 12,
+          }}
+        >
+          <div>
+            <h1 style={{ margin: '0 0 4px', fontSize: 20 }}>
+              SAチャット – 授業選択
+            </h1>
+            <p
+              style={{
+                margin: 0,
+                fontSize: 13,
+                color: '#6b7280',
+              }}
+            >
+              一度参加した授業は、次回からここから選ぶだけで参加できます。
+            </p>
+          </div>
+
+          {/* ★ ログイン中ユーザーのチップ表示（ログインしているときだけ） */}
+          {authChecked && userDisplayName && (
+            <div
+              style={{
+                fontSize: 11,
+                color: '#374151',
+                background: '#f3f4f6',
+                borderRadius: 999,
+                padding: '4px 10px',
+                border: '1px solid #e5e7eb',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              ログイン中：{userDisplayName}
+            </div>
+          )}
         </div>
 
         {/* 登録済み授業一覧 */}
@@ -269,7 +331,7 @@ export default function StudentCourseSelectPage() {
               }}
               aria-hidden="true"
             >
-              
+              ＋
             </div>
             <div
               style={{
