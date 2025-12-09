@@ -16,6 +16,7 @@ type Message = {
   attachment_url?: string | null;
   attachment_type?: string | null;
   attachment_name?: string | null;
+  parent_message_id?: string | number | null;
 };
 
 type MyCourse = {
@@ -48,6 +49,22 @@ export default function StudentCoursePage() {
   const courseCode = params.courseCode;
   const router = useRouter();
 
+
+  const getSenderLabel = (m: Message) => {
+  return m.role === 'sa' ? 'SA' : '学生（匿名）';
+};
+
+const getMessagePreview = (m: Message): string => {
+  if (m.body && m.body.trim() !== '') {
+    const firstLine = m.body.split('\n')[0];
+    return firstLine.length > 40 ? `${firstLine.slice(0, 40)}…` : firstLine;
+  }
+  if (m.attachment_name) return `📎 ${m.attachment_name}`;
+  if (m.attachment_url) return '📎 添付ファイル';
+  return '';
+};
+
+
   // チャットエリアのスクロール用
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -66,6 +83,9 @@ export default function StudentCoursePage() {
 
   const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
+
+  // ★ リプライ機能
+const [replyTarget, setReplyTarget] = useState<Message | null>(null);
 
   // 呼び出しモーダル関連
   const [showCallModal, setShowCallModal] = useState(false);
@@ -105,7 +125,7 @@ export default function StudentCoursePage() {
       const uid = data.user.id;
       setStudentUserId(uid);
 
-      // ★ 同じ Google アカウント & 同じ授業なら、どの端末でも同じ clientToken になる
+      // 同じ Google アカウント & 同じ授業なら、どの端末でも同じ clientToken になる
       const token = `${uid}:${courseCode}`;
       setClientToken(token);
 
@@ -273,19 +293,25 @@ useEffect(() => {
     };
   }, [courseCode, clientToken]);
 
-  // 自分のメッセージにフラグを持たせた配列
-  const messagesByOwn = useMemo(
-    () =>
-      messages.map((m) => ({
-        ...m,
-        isMe:
-          !!clientToken &&
-          m.client_token === clientToken &&
-          m.role === 'student',
-        isSa: m.role === 'sa',
-      })),
-    [messages, clientToken]
-  );
+  // 自分フラグ付きの型
+type RichMessage = Message & {
+  isMe: boolean;
+  isSa: boolean;
+};
+
+const messagesByOwn = useMemo<RichMessage[]>(
+  () =>
+    messages.map((m) => ({
+      ...m,
+      isMe:
+        !!clientToken &&
+        m.client_token === clientToken &&
+        m.role === 'student',
+      isSa: m.role === 'sa',
+    })),
+  [messages, clientToken]
+);
+
 
   // 自動スクロール（初期表示 & 新規メッセージ時）
   useEffect(() => {
@@ -298,6 +324,7 @@ useEffect(() => {
     e.preventDefault();
     const text = input.trim();
     const hasFile = !!attachmentFile;
+    
 
     if (!text && !hasFile) return;
     if (!courseCode || !clientToken || !studentUserId) {
@@ -340,20 +367,21 @@ useEffect(() => {
     }
 
     const { data, error } = await supabase
-      .from('messages')
-      .insert({
-        course_code: courseCode,
-        client_token: clientToken,
-        role: 'student',
-        body: text || (hasFile ? '' : ''),
-        attachment_url: attachmentUrl,
-        attachment_type: attachmentType,
-        attachment_name: attachmentName,
-        // ★ Supabase Auth の user.id を一緒に保存
-        student_user_id: studentUserId,
-      })
-      .select()
-      .single();
+  .from('messages')
+  .insert({
+    course_code: courseCode,
+    client_token: clientToken,
+    role: 'student',
+    body: text || (hasFile ? '' : ''),
+    attachment_url: attachmentUrl,
+    attachment_type: attachmentType,
+    attachment_name: attachmentName,
+    student_user_id: studentUserId,
+    // リプライ先があれば、そのメッセージIDを保存
+    parent_message_id: replyTarget ? replyTarget.id : null,
+  })
+  .select()
+  .single();
 
     if (error) {
       console.error(error);
@@ -364,6 +392,9 @@ useEffect(() => {
     if (data) {
       addMessageIfNotExists(data as Message);
     }
+    
+    // ★ 返信モード解除
+    setReplyTarget(null);
 
     setAttachmentFile(null);
     if (attachmentInputRef.current) {
@@ -624,128 +655,183 @@ useEffect(() => {
             ) : (
               <>
                 {messagesByOwn.map((m) => {
-                  const timeLabel = formatTime(m.created_at);
+                const timeLabel = formatTime(m.created_at);
+  const mine = m.isMe;
 
-                  const showRead =
-                    m.isMe &&
-                    !!saReadAt &&
-                    !!m.created_at &&
-                    m.created_at <= saReadAt;
+  const showRead =
+    mine && !!saReadAt && !!m.created_at && m.created_at <= saReadAt;
 
-                  return (
-                    <div
-                      key={String(m.id)}
-                      style={{
-                        display: 'flex',
-                        justifyContent: m.isMe ? 'flex-end' : 'flex-start',
-                        marginBottom: 8,
-                      }}
-                    >
-                      <div
-                        style={{
-                          maxWidth: '70%',
-                          alignSelf: m.isMe ? 'flex-end' : 'flex-start',
-                        }}
-                      >
-                        {!m.isMe && (
-                          <div
-                            style={{
-                              fontSize: 10,
-                              color: '#6b7280',
-                              marginBottom: 2,
-                            }}
-                          >
-                            {m.isSa ? 'SA' : '学生'}
-                          </div>
-                        )}
+  // ★ 親メッセージの取得
+  const parentMessage =
+    m.parent_message_id != null
+      ? messages.find(
+          (pm) => String(pm.id) === String(m.parent_message_id)
+        )
+      : undefined;
 
-                        {/* 吹き出し */}
-                        <div
-                          style={{
-                            padding: '8px 10px',
-                            borderRadius: 14,
-                            fontSize: 13,
-                            lineHeight: 1.4,
-                            background: m.isMe ? '#3b82f6' : '#ffffff',
-                            color: m.isMe ? '#ffffff' : '#111827',
-                            border: m.isMe ? 'none' : '1px solid #e5e7eb',
-                            display: 'block',
-                            textAlign: 'left',
-                            whiteSpace: 'normal',
-                            wordBreak: 'break-word',
-                            overflowWrap: 'break-word',
-                          }}
-                        >
-                          {m.body && <div>{m.body}</div>}
+  return (
+    <div
+      key={String(m.id)}
+      style={{
+        display: 'flex',
+        justifyContent: mine ? 'flex-end' : 'flex-start',
+        marginBottom: 8,
+      }}
+    >
+      <div
+        style={{
+          maxWidth: '70%',
+          alignSelf: mine ? 'flex-end' : 'flex-start',
+        }}
+      >
+        {!mine && (
+          <div
+            style={{
+              fontSize: 10,
+              color: '#6b7280',
+              marginBottom: 2,
+            }}
+          >
+            {m.isSa ? 'SA' : '学生'}
+          </div>
+        )}
 
-                          {m.attachment_url && (
-                            <div style={{ marginTop: m.body ? 8 : 0 }}>
-                              {m.attachment_type?.startsWith('image/') ? (
-                                <img
-                                  src={m.attachment_url}
-                                  alt={m.attachment_name ?? '添付画像'}
-                                  style={{
-                                    maxWidth: '100%',
-                                    borderRadius: 8,
-                                    display: 'block',
-                                  }}
-                                />
-                              ) : (
-                                <a
-                                  href={m.attachment_url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  style={{
-                                    fontSize: 12,
-                                    textDecoration: 'underline',
-                                  }}
-                                >
-                                  {m.attachment_name ?? '添付ファイルを開く'}
-                                </a>
-                              )}
-                            </div>
-                          )}
-                        </div>
+        {/* ★ 吹き出し本体 */}
+        <div
+          style={{
+            padding: '8px 10px',
+            borderRadius: 14,
+            fontSize: 13,
+            lineHeight: 1.4,
+            background: mine ? '#3b82f6' : '#ffffff',
+            color: mine ? '#ffffff' : '#111827',
+            border: mine ? 'none' : '1px solid #e5e7eb',
+            display: 'block',
+            textAlign: 'left',
+            whiteSpace: 'normal',
+            wordBreak: 'break-word',
+            overflowWrap: 'break-word',
+          }}
+        >
+          {/* ★リプライ元の引用 */}
+          {parentMessage && (
+            <div
+              style={{
+                marginBottom: m.body || m.attachment_url ? 6 : 0,
+                padding: '4px 6px',
+                borderRadius: 8,
+                borderLeft: mine
+                  ? '2px solid rgba(255,255,255,0.6)'
+                  : '2px solid #d1d5db',
+                background: mine
+                  ? 'rgba(255,255,255,0.12)'
+                  : '#f3f4f6',
+                fontSize: 11,
+              }}
+            >
+              <div
+                style={{
+                  fontWeight: 600,
+                  marginBottom: 2,
+                }}
+              >
+                {getSenderLabel(parentMessage)}
+              </div>
+              <div
+                style={{
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {getMessagePreview(parentMessage)}
+              </div>
+            </div>
+          )}
 
-                        {/* 吹き出しの下に 時間＋既読 */}
-                        {(timeLabel || showRead) && (
-                          <div
-                            style={{
-                              marginTop: 2,
-                              display: 'flex',
-                              justifyContent: m.isMe
-                                ? 'flex-end'
-                                : 'flex-start',
-                              gap: 6,
-                              fontSize: 10,
-                              alignItems: 'center',
-                            }}
-                          >
-                            {timeLabel && (
-                              <span
-                                style={{
-                                  color: '#9ca3af',
-                                }}
-                              >
-                                {timeLabel}
-                              </span>
-                            )}
-                            {showRead && (
-                              <span
-                                style={{
-                                  color: '#3b82f6',
-                                  fontWeight: 600,
-                                }}
-                              >
-                                既読
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+          {/* 元の本文や添付の描画 */}
+          {m.body && <div>{m.body}</div>}
+
+          {m.attachment_url && (
+            <div style={{ marginTop: m.body ? 8 : 0 }}>
+              {m.attachment_type?.startsWith('image/') ? (
+                <img
+                  src={m.attachment_url}
+                  alt={m.attachment_name ?? '添付画像'}
+                  style={{
+                    maxWidth: '100%',
+                    borderRadius: 8,
+                    display: 'block',
+                  }}
+                />
+              ) : (
+                <a
+                  href={m.attachment_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    fontSize: 12,
+                    textDecoration: 'underline',
+                  }}
+                >
+                  {m.attachment_name ?? '添付ファイルを開く'}
+                </a>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* リプライボタン */}
+        <div
+          style={{
+            fontSize: 11,
+            color: '#6b7280',
+            cursor: 'pointer',
+            marginTop: 2,
+          }}
+          onClick={() => setReplyTarget(m)}
+        >
+          ↪
+        </div>
+
+        {/* 吹き出しの下に 時間＋既読 */}
+        {(timeLabel || showRead) && (
+          <div
+            style={{
+              marginTop: 2,
+              display: 'flex',
+              justifyContent: mine ? 'flex-end' : 'flex-start',
+              gap: 6,
+              fontSize: 10,
+              alignItems: 'center',
+            }}
+          >
+            {timeLabel && (
+              <span
+                style={{
+                  color: '#9ca3af',
+                }}
+              >
+                {timeLabel}
+              </span>
+            )}
+            {showRead && (
+              <span
+                style={{
+                  color: '#3b82f6',
+                  fontWeight: 600,
+                }}
+              >
+                既読
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+})}
+
                 {/* 一番下のダミー要素（ここまでスクロール） */}
                 <div ref={bottomRef} />
               </>
@@ -788,6 +874,84 @@ useEffect(() => {
                 SAを呼ぶ
               </button>
             </div>
+            {/* 返信フォーム */}
+<form
+  onSubmit={handleSubmit}
+  style={{
+    display: 'flex',
+    gap: 8,
+    alignItems: 'flex-end',
+    minHeight: 0,
+    overflow: 'hidden',
+  }}
+>
+  <div
+    style={{
+      flex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 4,
+    }}
+  >
+    
+    {replyTarget && (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          padding: '4px 8px',
+          borderRadius: 8,
+          background: '#e5e7eb',
+        }}
+      >
+        <div
+          style={{
+            flex: 1,
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            style={{
+              fontSize: 10,
+              color: '#4b5563',
+              marginBottom: 2,
+            }}
+          >
+            返信先：{getSenderLabel(replyTarget)}
+          </div>
+          <div
+            style={{
+              fontSize: 11,
+              color: '#111827',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {getMessagePreview(replyTarget)}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setReplyTarget(null)}
+          style={{
+            border: 'none',
+            background: 'transparent',
+            fontSize: 14,
+            cursor: 'pointer',
+            padding: 2,
+            color: '#6b7280',
+          }}
+        >
+          ×
+        </button>
+      </div>
+      
+    )}
+    </div>
+</form>
 
             {/* 入力フォーム */}
             <form

@@ -25,6 +25,9 @@ type Message = {
   attachment_url?: string | null;
   attachment_type?: string | null;
   attachment_name?: string | null;
+  sa_user_id?: string | null;
+  sa_display_name?: string | null;
+  parent_message_id?: string | number | null;
 };
 
 type Call = {
@@ -57,6 +60,16 @@ type ThreadReadRealtimeRow = {
   last_read_at: string | null;
 };
 
+type SaReadRow = {
+  client_token: string;
+  last_read_at: string | null;
+};
+
+type ThreadPin = {
+  course_code: string;
+  client_token: string;
+  pinned_at: string | null;
+};
 
 type ThreadLock = {
   course_code: string;
@@ -93,6 +106,15 @@ function SaDashboardInner() {
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState('');
 
+  // 設定パネル表示フラグ
+  const [showSettingsPanel, setShowSettingsPanel] = useState(false);
+  // 表示名入力欄
+  const [displayNameInput, setDisplayNameInput] = useState('');
+  // プロフィール保存中フラグ
+  const [savingProfile, setSavingProfile] = useState(false);
+  // ログアウト中フラグ
+  const [loggingOut, setLoggingOut] = useState(false);
+
   // メッセージが変わるたびに一番下までスクロール
   useEffect(() => {
     if (!messageListRef.current) return;
@@ -104,6 +126,9 @@ function SaDashboardInner() {
   const [selectedStudentReadAt, setSelectedStudentReadAt] = useState<
     string | null
   >(null);
+
+   // SA 側の既読（thread_reads.reader_role === 'sa'）を client_token ごとに保存
+  const [saReadMap, setSaReadMap] = useState<Record<string, string | null>>({});
 
   // SA自身の情報
   const [saUserId, setSaUserId] = useState<string | null>(null);
@@ -121,12 +146,79 @@ function SaDashboardInner() {
   );
   const [confirming, setConfirming] = useState(false);
 
+  // どのメッセージに対する返信か（リプライターゲット）
+const [replyTarget, setReplyTarget] = useState<Message | null>(null);
+
+
+  // スレッドピン情報: client_token -> ピン情報 or null
+  const [threadPins, setThreadPins] = useState<Record<string, ThreadPin | null>>({});
+
   // 匿名番号: client_token -> 匿名番号 (1,2,3,...)
   const [aliasMap, setAliasMap] = useState<Record<string, number>>({});
 
   const showToast = (msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(''), 2000);
+  };
+
+  const openSettingsPanel = () => {
+    setDisplayNameInput(saName);
+    setShowSettingsPanel(true);
+  };
+
+  const closeSettingsPanel = () => {
+    if (savingProfile || loggingOut) return;
+    setShowSettingsPanel(false);
+  };
+
+  const handleSaveDisplayName = async () => {
+    if (!saUserId) {
+      showToast('ユーザー情報の取得に失敗しました');
+      return;
+    }
+
+    const name = displayNameInput.trim();
+    if (!name) {
+      showToast('表示名を入力してください');
+      return;
+    }
+
+    setSavingProfile(true);
+    const { error } = await supabase
+      .from('sa_profiles')
+      .upsert(
+        {
+          user_id: saUserId,
+          display_name: name,
+        },
+        { onConflict: 'user_id' }
+      );
+
+    setSavingProfile(false);
+
+    if (error) {
+      console.error('sa_profiles upsert error', error);
+      showToast('名前の保存に失敗しました');
+      return;
+    }
+
+    setSaName(name);
+    showToast('名前を更新しました');
+    setShowSettingsPanel(false);
+  };
+
+  const handleLogout = async () => {
+    setLoggingOut(true);
+    const { error } = await supabase.auth.signOut();
+    setLoggingOut(false);
+
+    if (error) {
+      console.error('logout error', error);
+      showToast('ログアウトに失敗しました');
+      return;
+    }
+
+    router.push('/sa/login');
   };
 
   const formatTime = (iso: string | null) => {
@@ -138,6 +230,59 @@ function SaDashboardInner() {
       minute: '2-digit',
     });
   };
+
+    const sortedThreads = useMemo(() => {
+    if (threads.length === 0) return [];
+
+    // 最後のメッセージを探すヘルパー
+    const getLastMessage = (token: string) => {
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        if (messages[i]?.client_token === token) {
+          return messages[i];
+        }
+      }
+      return null;
+    };
+
+    // ピン付きとピンなしに分割
+    const pinned: string[] = [];
+    const normal: string[] = [];
+
+    for (const t of threads) {
+      if (threadPins[t]) pinned.push(t);
+      else normal.push(t);
+    }
+
+    // ピン付きは pinned_at 降順
+    pinned.sort((a, b) => {
+      const aPin = threadPins[a];
+      const bPin = threadPins[b];
+      const aTime = aPin?.pinned_at ?? '';
+      const bTime = bPin?.pinned_at ?? '';
+      if (aTime === bTime) return 0;
+      if (!aTime) return 1;
+      if (!bTime) return -1;
+      return bTime.localeCompare(aTime);
+    });
+
+    // 通常は最後のメッセージ時刻 降順（今まで通り）
+    normal.sort((a, b) => {
+      const aLast = getLastMessage(a);
+      const bLast = getLastMessage(b);
+
+      const aTime = aLast?.created_at ?? '';
+      const bTime = bLast?.created_at ?? '';
+
+      if (aTime === bTime) return 0;
+      if (!aTime) return 1;
+      if (!bTime) return -1;
+      return bTime.localeCompare(aTime);
+    });
+
+    // 上にピン付き、下に通常
+    return [...pinned, ...normal];
+  }, [threads, messages, threadPins]);
+
 
   // ログインチェック & courseクエリが無ければ /sa へ
   useEffect(() => {
@@ -167,6 +312,25 @@ function SaDashboardInner() {
 
     void run();
   }, [router, initialCourseCode]);
+
+  //sa_profiles から display_name を読み込む
+  useEffect(() => {
+    if (!saUserId) return;
+
+    const run = async () => {
+      const { data, error } = await supabase
+        .from('sa_profiles')
+        .select('display_name')
+        .eq('user_id', saUserId)
+        .maybeSingle();
+
+      if (!error && data?.display_name) {
+        setSaName(data.display_name);
+      }
+    };
+
+    void run();
+  }, [saUserId]);
 
   // 授業情報・メッセージ・呼び出しの初期取得
   useEffect(() => {
@@ -203,9 +367,6 @@ function SaDashboardInner() {
           new Set(ms.map((m) => m.client_token))
         );
         setThreads(threadTokens);
-        if (!selectedThreadToken && threadTokens.length > 0) {
-          setSelectedThreadToken(threadTokens[0]);
-        }
       }
 
       // 呼び出し（未対応のみ）
@@ -263,6 +424,35 @@ function SaDashboardInner() {
       supabase.removeChannel(channel);
     };
   }, [currentCourseCode]);
+
+  // 送り手ラベル（SA画面）
+// SA → sa_display_name or 「教員 / SA」
+// student → 「学生（匿名）」
+const getSenderLabel = (m: Message): string => {
+  if (m.role === 'sa') {
+    return m.sa_display_name ?? '教員 / SA';
+  }
+  return '学生（匿名）';
+};
+
+// 本文プレビュー（最初の1行）
+// ・1行目だけ
+// ・40文字くらいで切る
+// ・本文がなければファイル名などを出す
+const getMessagePreview = (m: Message): string => {
+  if (m.body && m.body.trim() !== '') {
+    const firstLine = m.body.split('\n')[0];
+    return firstLine.length > 40 ? `${firstLine.slice(0, 40)}…` : firstLine;
+  }
+  if (m.attachment_name) {
+    return `📎 ${m.attachment_name}`;
+  }
+  if (m.attachment_url) {
+    return '📎 添付ファイル';
+  }
+  return '';
+};
+
 
   // Realtime: 呼び出し（INSERT & UPDATE）
   useEffect(() => {
@@ -394,6 +584,219 @@ function SaDashboardInner() {
     };
   }, [currentCourseCode]);
 
+    // thread_pins を取得 & Realtime購読（ピン留め）
+  useEffect(() => {
+    if (!currentCourseCode) return;
+
+    const fetchPins = async () => {
+      const { data, error } = await supabase
+        .from('thread_pins')
+        .select('course_code, client_token, pinned_at')
+        .eq('course_code', currentCourseCode);
+
+      if (error) {
+        console.error('thread_pins fetch error', error);
+        return;
+      }
+
+      const map: Record<string, ThreadPin | null> = {};
+      for (const row of data as ThreadPin[]) {
+        map[row.client_token] = row;
+      }
+      setThreadPins(map);
+    };
+
+    void fetchPins();
+
+    const channel = supabase
+      .channel(`thread_pins:${currentCourseCode}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'thread_pins',
+          filter: `course_code=eq.${currentCourseCode}`,
+        },
+        (payload) => {
+          const row = payload.new as ThreadPin;
+          setThreadPins((prev) => ({
+            ...prev,
+            [row.client_token]: row,
+          }));
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'thread_pins',
+          filter: `course_code=eq.${currentCourseCode}`,
+        },
+        (payload) => {
+          const row = payload.new as ThreadPin;
+          setThreadPins((prev) => ({
+            ...prev,
+            [row.client_token]: row,
+          }));
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'thread_pins',
+          filter: `course_code=eq.${currentCourseCode}`,
+        },
+        (payload) => {
+          const row = payload.old as ThreadPin;
+          setThreadPins((prev) => ({
+            ...prev,
+            [row.client_token]: null,
+          }));
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [currentCourseCode]);
+
+    // ピン留め / 解除
+  const handleTogglePin = async (token: string) => {
+    if (!currentCourseCode) return;
+
+    const existing = threadPins[token];
+
+    // すでにピンされている → 解除（DELETE）
+    if (existing) {
+      const { error } = await supabase
+        .from('thread_pins')
+        .delete()
+        .eq('course_code', currentCourseCode)
+        .eq('client_token', token);
+
+      if (error) {
+        console.error('thread_pins delete error', error);
+        showToast('ピン留め解除に失敗しました');
+        return;
+      }
+
+      // 楽観的更新（Realtime でも上書きされる）
+      setThreadPins((prev) => ({
+        ...prev,
+        [token]: null,
+      }));
+      return;
+    }
+
+    // ピンされていない → ピン留め（UPSERT）
+    const { data, error } = await supabase
+      .from('thread_pins')
+      .upsert(
+        {
+          course_code: currentCourseCode,
+          client_token: token,
+        },
+        {
+          onConflict: 'course_code,client_token',
+        }
+      )
+      .select('course_code, client_token, pinned_at')
+      .single<ThreadPin>();
+
+    if (error || !data) {
+      console.error('thread_pins upsert error', error);
+      showToast('ピン留めに失敗しました');
+      return;
+    }
+
+    setThreadPins((prev) => ({
+      ...prev,
+      [token]: data,
+    }));
+  };
+
+    // この授業の SA 既読情報を一括ロード
+  useEffect(() => {
+    if (!currentCourseCode) return;
+
+    const run = async () => {
+      const { data, error } = await supabase
+        .from('thread_reads')
+        .select('client_token, last_read_at')
+        .eq('course_code', currentCourseCode)
+        .eq('reader_role', 'sa');
+
+      if (error || !data) {
+        console.error('sa thread_reads fetch error', error);
+        return;
+      }
+
+            const map: Record<string, string | null> = {};
+      for (const row of data as SaReadRow[]) {
+        map[row.client_token] = row.last_read_at;
+      }
+
+      setSaReadMap(map);
+    };
+
+    void run();
+  }, [currentCourseCode]);
+
+    //SA 側の既読（thread_reads.reader_role === 'sa'）を Realtime で反映
+  useEffect(() => {
+    if (!currentCourseCode) return;
+
+    const channel = supabase
+      .channel(`sa-thread-reads-sa:${currentCourseCode}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'thread_reads',
+          filter: `course_code=eq.${currentCourseCode}`,
+        },
+        (payload) => {
+          const row = payload.new as ThreadReadRealtimeRow;
+          if (row.reader_role === 'sa') {
+            setSaReadMap((prev) => ({
+              ...prev,
+              [row.client_token]: row.last_read_at,
+            }));
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'thread_reads',
+          filter: `course_code=eq.${currentCourseCode}`,
+        },
+        (payload) => {
+          const row = payload.new as ThreadReadRealtimeRow;
+          if (row.reader_role === 'sa') {
+            setSaReadMap((prev) => ({
+              ...prev,
+              [row.client_token]: row.last_read_at,
+            }));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [currentCourseCode]);
+
+
   // 学生側の既読時刻を「最初に一度だけ」読み込む
 useEffect(() => {
   if (!currentCourseCode || !selectedThreadToken) {
@@ -493,6 +896,12 @@ useEffect(() => {
             onConflict: 'course_code,client_token,reader_role',
           }
         );
+
+        // 自分の画面でも即時反映（Realtimeを待たない）
+        setSaReadMap((prev) => ({
+          ...prev,
+          [selectedThreadToken]: now,
+        }));
       } catch (e) {
         console.error(e);
       }
@@ -712,11 +1121,13 @@ useEffect(() => {
         }
       });
 
-      // 新しい alias をまとめて挿入
+            // alias をまとめて挿入（重複しても落ちないように upsert）
       if (inserts.length > 0) {
         const { error: insertError } = await supabase
           .from('student_aliases')
-          .insert(inserts);
+          .upsert(inserts, {
+            onConflict: 'course_code,client_token',
+          });
 
         if (insertError) {
           console.error('student_aliases insert error', insertError);
@@ -724,6 +1135,7 @@ useEffect(() => {
       }
 
       setAliasMap(map);
+
     };
 
     void run();
@@ -810,6 +1222,9 @@ useEffect(() => {
         attachment_url: attachmentUrl,
         attachment_type: attachmentType,
         attachment_name: attachmentName,
+        sa_user_id: saUserId,
+        sa_display_name: saName,
+        parent_message_id: replyTarget ? replyTarget.id : null,
       })
       .select()
       .single();
@@ -829,6 +1244,7 @@ useEffect(() => {
     if (replyFileInputRef.current) {
       replyFileInputRef.current.value = '';
     }
+    setReplyTarget(null);
   };
 
   // 呼び出し「対応済み」クリック → 確認モーダル
@@ -899,7 +1315,7 @@ useEffect(() => {
       }}
     >
       {/* ヘッダー */}
-      <header
+            <header
         style={{
           padding: '10px 16px',
           background: '#ffffff',
@@ -927,34 +1343,72 @@ useEffect(() => {
           >
             {headerMeta}
           </div>
-          <div
-            style={{
-              marginTop: 2,
-              fontSize: 11,
-              color: '#9ca3af',
-            }}
-          >
-            左：スレッド一覧 / 中：チャット / 右：呼び出し一覧
-          </div>
         </div>
 
-        <button
-          type="button"
-          onClick={handleBackToCourses}
+        {/* 右側：アカウント情報 */}
+        <div
           style={{
-            borderRadius: 999,
-            border: 'none',
-            padding: '6px 12px',
-            fontSize: 12,
-            cursor: 'pointer',
-            background: '#e5e7eb',
-            color: '#374151',
-            whiteSpace: 'nowrap',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
           }}
         >
-          授業一覧に戻る
-        </button>
+          <div
+            style={{
+              fontSize: 12,
+              color: '#6b7280',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {saName} でログイン中
+          </div>
+          <button
+            type="button"
+            onClick={openSettingsPanel}
+            style={{
+              borderRadius: 999,
+              border: '1px solid #d1d5db',
+              padding: '6px 10px',
+              fontSize: 13,
+              cursor: 'pointer',
+              background: '#f9fafb',
+              color: '#111827',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <span>👤</span>
+            <span
+              style={{
+                fontSize: 11,
+                color: '#4b5563',
+              }}
+            >
+              個人設定
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleBackToCourses}
+            style={{
+              borderRadius: 999,
+              border: 'none',
+              padding: '6px 12px',
+              fontSize: 12,
+              cursor: 'pointer',
+              background: '#e5e7eb',
+              color: '#374151',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            授業一覧に戻る
+          </button>
+        </div>
       </header>
+
 
       {/* 本体 */}
       <div
@@ -1017,7 +1471,7 @@ useEffect(() => {
                   まだメッセージがありません。
                 </div>
               ) : (
-                threads.map((token) => {
+                  sortedThreads.map((token) => {
                   const lastMessage = messages
                     .filter((m) => m.client_token === token)
                     .slice(-1)[0];
@@ -1036,59 +1490,146 @@ useEffect(() => {
                   const displayName = aliasNumber
                     ? `匿名${aliasNumber}`
                     : '匿名さん';
+                  const isPinned = !!threadPins[token];
+
+                  // 未読件数: 「SA既読より新しい学生メッセージ」の数
+                  const saLastRead = saReadMap[token] ?? null;
+                  const unreadCount = messages.reduce((count, m) => {
+                    if (m.client_token !== token) return count;
+                    if (m.role !== 'student') return count;
+                    if (!m.created_at) return count;
+
+                    if (!saLastRead || m.created_at > saLastRead) {
+                      return count + 1;
+                    }
+                    return count;
+                  }, 0);
 
                   return (
-                    <button
+                    <div
                       key={token}
-                      type="button"
-                      onClick={() => setSelectedThreadToken(token)}
                       style={{
-                        width: '100%',
-                        textAlign: 'left',
-                        borderRadius: 10,
-                        border: 'none',
-                        padding: '8px 8px',
                         marginBottom: 6,
-                        cursor: 'pointer',
-                        background: isSelected ? '#111827' : '#ffffff',
-                        color: isSelected ? '#f9fafb' : '#111827',
                       }}
                     >
-                      <div
+                      {/* カード全体をクリックで選択 */}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSelectedThreadToken((prev) =>
+                            prev === token ? null : token
+                          )
+                        }
                         style={{
-                          fontSize: 12,
-                          fontWeight: 600,
-                          marginBottom: 2,
+                          width: '100%',
+                          textAlign: 'left',
+                          borderRadius: 10,
+                          border: 'none',
+                          padding: '8px 8px',
+                          cursor: 'pointer',
+                          background: isSelected ? '#111827' : '#ffffff',
+                          color: isSelected ? '#f9fafb' : '#111827',
+                          position: 'relative',
                         }}
                       >
-                        {displayName}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: 11,
-                          color: isSelected ? '#e5e7eb' : '#6b7280',
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                        }}
-                      >
-                        {lastMessage
-                          ? lastMessage.body ||
-                            (lastMessage.attachment_name ?? '（ファイル添付）')
-                          : 'まだメッセージはありません'}
-                      </div>
-                      {lockLabel && (
+                        {/* 1行目：名前 + ピンボタン */}
                         <div
                           style={{
-                            marginTop: 2,
-                            fontSize: 10,
-                            color: isSelected ? '#93c5fd' : '#3b82f6',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: 4,
+                            marginBottom: 2,
                           }}
                         >
-                          {lockLabel}
+                          <div
+                            style={{
+                              fontSize: 12,
+                              fontWeight: 600,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {displayName}
+                          </div>
+
+                          {/* ピンボタン（button の中に button は入れられないので span にする） */}
+                          <span
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleTogglePin(token);
+                            }}
+                            role="button"
+                            aria-label={isPinned ? 'ピン留め解除' : 'ピン留め'}
+                            style={{
+                              fontSize: 12,
+                              cursor: 'pointer',
+                              userSelect: 'none',
+                              color: isPinned
+                                ? isSelected
+                                  ? '#facc15'
+                                  : '#eab308'
+                                : isSelected
+                                ? '#9ca3af'
+                                : '#d1d5db',
+                            }}
+                          >
+                            {isPinned ? '✨' : '📍'}
+                          </span>
                         </div>
-                      )}
-                    </button>
+
+                        {/* 未読バッジ */}
+                        {unreadCount > 0 && (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              top: 6,
+                              right: 8,
+                              minWidth: 18,
+                              height: 18,
+                              borderRadius: 999,
+                              background: '#ef4444',
+                              color: '#ffffff',
+                              fontSize: 10,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              padding: '0 5px',
+                              fontWeight: 600,
+                            }}
+                          >
+                            {unreadCount > 9 ? '9+' : unreadCount}
+                          </div>
+                        )}
+
+                        <div
+                          style={{
+                            fontSize: 11,
+                            color: isSelected ? '#e5e7eb' : '#6b7280',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                          }}
+                        >
+                          {lastMessage
+                            ? lastMessage.body ||
+                              (lastMessage.attachment_name ?? '（ファイル添付）')
+                            : 'まだメッセージはありません'}
+                        </div>
+                        {lockLabel && (
+                          <div
+                            style={{
+                              marginTop: 2,
+                              fontSize: 10,
+                              color: isSelected ? '#93c5fd' : '#3b82f6',
+                            }}
+                          >
+                            {lockLabel}
+                          </div>
+                        )}
+                      </button>
+                    </div>
                   );
                 })
               )}
@@ -1225,13 +1766,20 @@ useEffect(() => {
               ) : (
                 selectedMessages.map((m) => {
                   const mine = m.role === 'sa';
+                  const senderLabel = getSenderLabel(m);
                   const timeLabel = formatTime(m.created_at);
                   const showRead =
                     mine &&
                     !!selectedStudentReadAt &&
                     !!m.created_at &&
                     m.created_at <= selectedStudentReadAt;
-
+                  // 親メッセージ（リプライ元）を探す
+                  const parentMessage =
+                    m.parent_message_id != null
+                      ? messages.find(
+                          (pm) => String(pm.id) === String(m.parent_message_id)
+                    )
+                  : undefined;
                   return (
                     <div
                       key={String(m.id)}
@@ -1250,12 +1798,12 @@ useEffect(() => {
                       >
                         <div
                           style={{
-                            fontSize: 10,
-                            color: '#6b7280',
-                            marginBottom: 2,
-                          }}
+                          fontSize: 10,
+                          color: '#6b7280',
+                          marginBottom: 2,
+                        }}
                         >
-                          {mine ? 'SA / 教員' : '学生（匿名）'}
+                          {senderLabel}
                         </div>
                         <div
                           style={{
@@ -1272,6 +1820,39 @@ useEffect(() => {
                             textAlign: 'left',
                           }}
                         >
+                           {/*リプライ元の引用 */}
+                            {parentMessage && (
+                            <div
+                            style={{
+                            marginBottom: m.body || m.attachment_url ? 6 : 0,
+                            padding: '4px 6px',
+                            borderRadius: 8,
+                            borderLeft: mine ? '2px solid #9ca3af' : '2px solid #d1d5db',
+                            background: mine ? 'rgba(31,41,55,0.6)' : '#f3f4f6',
+                            fontSize: 11,
+                            }}
+                            >
+                          <div
+                          style={{
+                          fontWeight: 600,
+                          marginBottom: 2,
+                          }}
+                          >
+                          {getSenderLabel(parentMessage)}
+                          </div>
+                          <div
+                          style={{
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          }}
+                          >
+                          {getMessagePreview(parentMessage)}
+                          </div>
+                          </div>
+                          )}
+
+                          {/* 元の本文や添付の描画 */}
                           {m.body && <div>{m.body}</div>}
 
                           {m.attachment_url && (
@@ -1302,6 +1883,29 @@ useEffect(() => {
                             </div>
                           )}
                         </div>
+                      </div>
+                      <div
+                      style={{
+                      display: 'flex',
+                      justifyContent: mine ? 'flex-end' : 'flex-start',
+                      maxWidth: 360,
+                      }}
+                      >
+                      <button
+                      type="button"
+                      onClick={() => setReplyTarget(m)}
+                      style={{
+                      marginTop: 2,
+                      border: 'none',
+                      background: 'transparent',
+                      fontSize: 10,
+                      color: '#6b7280',
+                      cursor: 'pointer',
+                      padding: 0,
+                      }}
+                      >
+                        ↪ 
+                      </button>
                       </div>
                       <div
                         style={{
@@ -1350,6 +1954,61 @@ useEffect(() => {
                   gap: 4,
                 }}
               >
+                {replyTarget && (
+                <div
+                style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8,
+                padding: '4px 8px',
+                borderRadius: 8,
+                background: '#e5e7eb',
+                }}
+                >
+                <div
+                style={{
+                flex: 1,
+                overflow: 'hidden',
+                }}
+                >
+                <div
+                style={{
+                fontSize: 10,
+                color: '#4b5563',
+                marginBottom: 2,
+                }}
+                >
+                返信先：{getSenderLabel(replyTarget)}
+                </div>
+                <div
+                style={{
+                fontSize: 11,
+                color: '#111827',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                }}
+                >
+                {getMessagePreview(replyTarget)}
+                  </div>
+                </div>
+                <button
+                type="button"
+                onClick={() => setReplyTarget(null)}
+                style={{
+                border: 'none',
+                background: 'transparent',
+                fontSize: 14,
+                cursor: 'pointer',
+                padding: 2,
+                color: '#6b7280',
+                }}
+                >
+                ×
+                </button>
+                </div>
+                )}
                 <textarea
                   value={replyText}
                   onChange={(e) => setReplyText(e.target.value)}
@@ -1531,6 +2190,140 @@ useEffect(() => {
           </div>
         </div>
       </div>
+
+            {/* 個人設定パネル */}
+      {showSettingsPanel && (
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              closeSettingsPanel();
+            }
+          }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.2)',
+            display: 'flex',
+            justifyContent: 'flex-end',
+            zIndex: 35,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 280,
+              maxWidth: '80vw',
+              height: '100%',
+              background: '#ffffff',
+              boxShadow: '-4px 0 16px rgba(0,0,0,0.15)',
+              display: 'flex',
+              flexDirection: 'column',
+              padding: '16px 16px 12px',
+            }}
+          >
+            <div
+              style={{
+                fontSize: 15,
+                fontWeight: 600,
+                marginBottom: 12,
+              }}
+            >
+              個人設定
+            </div>
+
+            <label
+              style={{
+                fontSize: 12,
+                fontWeight: 500,
+                marginBottom: 4,
+                display: 'block',
+              }}
+            >
+              表示名（SA / 教員名）
+            </label>
+            <input
+              type="text"
+              value={displayNameInput}
+              onChange={(e) => setDisplayNameInput(e.target.value)}
+              placeholder="例: 本郷先生 / 佐藤SA など"
+              style={{
+                width: '100%',
+                borderRadius: 8,
+                border: '1px solid #d1d5db',
+                padding: '6px 8px',
+                fontSize: 13,
+                marginBottom: 10,
+              }}
+            />
+
+            <button
+              type="button"
+              onClick={handleSaveDisplayName}
+              disabled={savingProfile}
+              style={{
+                width: '100%',
+                borderRadius: 999,
+                border: 'none',
+                padding: '8px 12px',
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: savingProfile ? 'default' : 'pointer',
+                background: savingProfile ? '#9ca3af' : '#111827',
+                color: '#ffffff',
+                marginBottom: 16,
+              }}
+            >
+              {savingProfile ? '保存中…' : '保存する'}
+            </button>
+
+            <div
+              style={{
+                borderTop: '1px solid #e5e7eb',
+                margin: '8px 0 8px',
+              }}
+            />
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              disabled={loggingOut}
+              style={{
+                width: '100%',
+                borderRadius: 999,
+                border: 'none',
+                padding: '8px 12px',
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: loggingOut ? 'default' : 'pointer',
+                background: 'transparent',
+                color: '#ef4444', // 👈 赤文字
+                textAlign: 'left',
+              }}
+            >
+              {loggingOut ? 'ログアウト中…' : 'ログアウトする'}
+            </button>
+
+            <button
+              type="button"
+              onClick={closeSettingsPanel}
+              style={{
+                marginTop: 'auto',
+                alignSelf: 'flex-end',
+                borderRadius: 999,
+                border: 'none',
+                padding: '6px 10px',
+                fontSize: 12,
+                cursor: 'pointer',
+                background: '#e5e7eb',
+                color: '#374151',
+              }}
+            >
+              閉じる
+            </button>
+          </div>
+        </div>
+      )}
+
 
       {/* 呼び出し対応確認モーダル */}
       {confirmClientToken && (
