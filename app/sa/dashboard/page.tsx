@@ -2,8 +2,8 @@
 'use client';
 export const dynamic = 'force-dynamic';
 
-import { Suspense } from 'react'; 
-import { FormEvent, useEffect, useMemo, useState, useRef } from 'react';
+import { Suspense } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 
@@ -127,7 +127,7 @@ function SaDashboardInner() {
     string | null
   >(null);
 
-   // SA 側の既読（thread_reads.reader_role === 'sa'）を client_token ごとに保存
+  // SA 側の既読（thread_reads.reader_role === 'sa'）を client_token ごとに保存
   const [saReadMap, setSaReadMap] = useState<Record<string, string | null>>({});
 
   // SA自身の情報
@@ -147,11 +147,12 @@ function SaDashboardInner() {
   const [confirming, setConfirming] = useState(false);
 
   // どのメッセージに対する返信か（リプライターゲット）
-const [replyTarget, setReplyTarget] = useState<Message | null>(null);
-
+  const [replyTarget, setReplyTarget] = useState<Message | null>(null);
 
   // スレッドピン情報: client_token -> ピン情報 or null
-  const [threadPins, setThreadPins] = useState<Record<string, ThreadPin | null>>({});
+  const [threadPins, setThreadPins] = useState<Record<string, ThreadPin | null>>(
+    {}
+  );
 
   // 匿名番号: client_token -> 匿名番号 (1,2,3,...)
   const [aliasMap, setAliasMap] = useState<Record<string, number>>({});
@@ -231,7 +232,7 @@ const [replyTarget, setReplyTarget] = useState<Message | null>(null);
     });
   };
 
-    const sortedThreads = useMemo(() => {
+  const sortedThreads = useMemo(() => {
     if (threads.length === 0) return [];
 
     // 最後のメッセージを探すヘルパー
@@ -265,7 +266,7 @@ const [replyTarget, setReplyTarget] = useState<Message | null>(null);
       return bTime.localeCompare(aTime);
     });
 
-    // 通常は最後のメッセージ時刻 降順（今まで通り）
+    // 通常は最後のメッセージ時刻 降順
     normal.sort((a, b) => {
       const aLast = getLastMessage(a);
       const bLast = getLastMessage(b);
@@ -282,7 +283,6 @@ const [replyTarget, setReplyTarget] = useState<Message | null>(null);
     // 上にピン付き、下に通常
     return [...pinned, ...normal];
   }, [threads, messages, threadPins]);
-
 
   // ログインチェック & courseクエリが無ければ /sa へ
   useEffect(() => {
@@ -313,7 +313,7 @@ const [replyTarget, setReplyTarget] = useState<Message | null>(null);
     void run();
   }, [router, initialCourseCode]);
 
-  //sa_profiles から display_name を読み込む
+  // sa_profiles から display_name を読み込む
   useEffect(() => {
     if (!saUserId) return;
 
@@ -426,33 +426,29 @@ const [replyTarget, setReplyTarget] = useState<Message | null>(null);
   }, [currentCourseCode]);
 
   // 送り手ラベル（SA画面）
-// SA → sa_display_name or 「教員 / SA」
-// student → 「学生（匿名）」
-const getSenderLabel = (m: Message): string => {
-  if (m.role === 'sa') {
-    return m.sa_display_name ?? '教員 / SA';
-  }
-  return '学生（匿名）';
-};
+  // SA → sa_display_name or 「教員 / SA」
+  // student → 「学生（匿名）」
+  const getSenderLabel = (m: Message): string => {
+    if (m.role === 'sa') {
+      return m.sa_display_name ?? '教員 / SA';
+    }
+    return '学生（匿名）';
+  };
 
-// 本文プレビュー（最初の1行）
-// ・1行目だけ
-// ・40文字くらいで切る
-// ・本文がなければファイル名などを出す
-const getMessagePreview = (m: Message): string => {
-  if (m.body && m.body.trim() !== '') {
-    const firstLine = m.body.split('\n')[0];
-    return firstLine.length > 40 ? `${firstLine.slice(0, 40)}…` : firstLine;
-  }
-  if (m.attachment_name) {
-    return `📎 ${m.attachment_name}`;
-  }
-  if (m.attachment_url) {
-    return '📎 添付ファイル';
-  }
-  return '';
-};
-
+  // 本文プレビュー（最初の1行）
+  const getMessagePreview = (m: Message): string => {
+    if (m.body && m.body.trim() !== '') {
+      const firstLine = m.body.split('\n')[0];
+      return firstLine.length > 40 ? `${firstLine.slice(0, 40)}…` : firstLine;
+    }
+    if (m.attachment_name) {
+      return `📎 ${m.attachment_name}`;
+    }
+    if (m.attachment_url) {
+      return '📎 添付ファイル';
+    }
+    return '';
+  };
 
   // Realtime: 呼び出し（INSERT & UPDATE）
   useEffect(() => {
@@ -584,7 +580,7 @@ const getMessagePreview = (m: Message): string => {
     };
   }, [currentCourseCode]);
 
-    // thread_pins を取得 & Realtime購読（ピン留め）
+  // thread_pins を取得 & Realtime購読（ピン留め）
   useEffect(() => {
     if (!currentCourseCode) return;
 
@@ -665,7 +661,7 @@ const getMessagePreview = (m: Message): string => {
     };
   }, [currentCourseCode]);
 
-    // ピン留め / 解除
+  // ピン留め / 解除
   const handleTogglePin = async (token: string) => {
     if (!currentCourseCode) return;
 
@@ -685,7 +681,7 @@ const getMessagePreview = (m: Message): string => {
         return;
       }
 
-      // 楽観的更新（Realtime でも上書きされる）
+      // 楽観的更新
       setThreadPins((prev) => ({
         ...prev,
         [token]: null,
@@ -720,7 +716,7 @@ const getMessagePreview = (m: Message): string => {
     }));
   };
 
-    // この授業の SA 既読情報を一括ロード
+  // この授業の SA 既読情報を一括ロード
   useEffect(() => {
     if (!currentCourseCode) return;
 
@@ -736,7 +732,7 @@ const getMessagePreview = (m: Message): string => {
         return;
       }
 
-            const map: Record<string, string | null> = {};
+      const map: Record<string, string | null> = {};
       for (const row of data as SaReadRow[]) {
         map[row.client_token] = row.last_read_at;
       }
@@ -747,7 +743,7 @@ const getMessagePreview = (m: Message): string => {
     void run();
   }, [currentCourseCode]);
 
-    //SA 側の既読（thread_reads.reader_role === 'sa'）を Realtime で反映
+  // SA 側の既読（thread_reads.reader_role === 'sa'）を Realtime で反映
   useEffect(() => {
     if (!currentCourseCode) return;
 
@@ -796,86 +792,80 @@ const getMessagePreview = (m: Message): string => {
     };
   }, [currentCourseCode]);
 
-
-  // 学生側の既読時刻を「最初に一度だけ」読み込む
-useEffect(() => {
-  if (!currentCourseCode || !selectedThreadToken) {
-    setSelectedStudentReadAt(null);
-    return;
-  }
-
-  const run = async () => {
-    const { data, error } = await supabase
-      .from('thread_reads')
-      .select('last_read_at')
-      .eq('course_code', currentCourseCode)
-      .eq('client_token', selectedThreadToken)
-      .eq('reader_role', 'student')
-      .maybeSingle<StudentReadRow>();
-
-    if (error || !data) {
+  // 学生側の既読時刻をロード
+  useEffect(() => {
+    if (!currentCourseCode || !selectedThreadToken) {
       setSelectedStudentReadAt(null);
       return;
     }
-    setSelectedStudentReadAt(data.last_read_at);
-  };
 
-  void run();
-}, [currentCourseCode, selectedThreadToken]);
+    const run = async () => {
+      const { data, error } = await supabase
+        .from('thread_reads')
+        .select('last_read_at')
+        .eq('course_code', currentCourseCode)
+        .eq('client_token', selectedThreadToken)
+        .eq('reader_role', 'student')
+        .maybeSingle<StudentReadRow>();
 
-
-// 学生側の既読（thread_reads）の変更を Realtime で受け取る
-useEffect(() => {
-  if (!currentCourseCode) return;
-
-  const channel = supabase
-    .channel(`sa-thread-reads:${currentCourseCode}`)
-    .on(
-      'postgres_changes',
-      {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'thread_reads',
-        filter: `course_code=eq.${currentCourseCode}`,
-      },
-      (payload) => {
-        const row = payload.new as ThreadReadRealtimeRow;
-        // 今見ているスレッド & 学生側の既読だけ反映
-        if (
-          row.reader_role === 'student' &&
-          row.client_token === selectedThreadToken
-        ) {
-          setSelectedStudentReadAt(row.last_read_at);
-        }
+      if (error || !data) {
+        setSelectedStudentReadAt(null);
+        return;
       }
-    )
-    .on(
-      'postgres_changes',
-      {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'thread_reads',
-        filter: `course_code=eq.${currentCourseCode}`,
-      },
-      (payload) => {
-        const row = payload.new as ThreadReadRealtimeRow;
-        if (
-          row.reader_role === 'student' &&
-          row.client_token === selectedThreadToken
-        ) {
-          setSelectedStudentReadAt(row.last_read_at);
+      setSelectedStudentReadAt(data.last_read_at);
+    };
+
+    void run();
+  }, [currentCourseCode, selectedThreadToken]);
+
+  // 学生側の既読（thread_reads）の変更を Realtime で受け取る
+  useEffect(() => {
+    if (!currentCourseCode) return;
+
+    const channel = supabase
+      .channel(`sa-thread-reads:${currentCourseCode}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'thread_reads',
+          filter: `course_code=eq.${currentCourseCode}`,
+        },
+        (payload) => {
+          const row = payload.new as ThreadReadRealtimeRow;
+          if (
+            row.reader_role === 'student' &&
+            row.client_token === selectedThreadToken
+          ) {
+            setSelectedStudentReadAt(row.last_read_at);
+          }
         }
-      }
-    )
-    .subscribe();
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'thread_reads',
+          filter: `course_code=eq.${currentCourseCode}`,
+        },
+        (payload) => {
+          const row = payload.new as ThreadReadRealtimeRow;
+          if (
+            row.reader_role === 'student' &&
+            row.client_token === selectedThreadToken
+          ) {
+            setSelectedStudentReadAt(row.last_read_at);
+          }
+        }
+      )
+      .subscribe();
 
-  return () => {
-    supabase.removeChannel(channel);
-  };
-}, [currentCourseCode, selectedThreadToken]);
-
-
-
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [currentCourseCode, selectedThreadToken]);
 
   // SA がこのスレッドを開いた → 生徒側の既読に反映
   useEffect(() => {
@@ -897,7 +887,6 @@ useEffect(() => {
           }
         );
 
-        // 自分の画面でも即時反映（Realtimeを待たない）
         setSaReadMap((prev) => ({
           ...prev,
           [selectedThreadToken]: now,
@@ -945,20 +934,17 @@ useEffect(() => {
 
     const existing = threadLocks[selectedThreadToken];
 
-    // すでに自分が担当なら何もしない
     if (existing && existing.sa_user_id === saUserId) {
       setTakingLock(false);
       return;
     }
 
-    // 他のSAが担当している場合は弾く
     if (existing && existing.sa_user_id !== saUserId) {
       showToast(`${existing.sa_name ?? '他のSA'} がこのスレッドを対応中です`);
       setTakingLock(false);
       return;
     }
 
-    // ロックを取得（または自分に更新）
     const { data, error } = await supabase
       .from('thread_locks')
       .upsert(
@@ -1001,7 +987,6 @@ useEffect(() => {
 
     const existing = threadLocks[selectedThreadToken];
     if (!existing) {
-      // もうロックがない
       return;
     }
     if (existing.sa_user_id !== saUserId) {
@@ -1063,24 +1048,17 @@ useEffect(() => {
     );
   }, [calls]);
 
-  // ◆ 匿名番号（匿名1, 匿名2, ...）を course ごと & client_token ごとに振る
+  // 匿名番号を授業ごと & client_token ごとに振る
   useEffect(() => {
     if (!currentCourseCode) return;
 
-    // この授業で「番号を振りたい client_token」を集める
     const targetTokens = new Set<string>();
-
-    for (const t of threads) {
-      targetTokens.add(t);
-    }
-    for (const c of calls) {
-      targetTokens.add(c.client_token);
-    }
+    for (const t of threads) targetTokens.add(t);
+    for (const c of calls) targetTokens.add(c.client_token);
 
     if (targetTokens.size === 0) return;
 
     const run = async () => {
-      // すでに付いている alias を読み込み
       const { data, error } = await supabase
         .from('student_aliases')
         .select('client_token, alias_number')
@@ -1102,7 +1080,6 @@ useEffect(() => {
         if (row.alias_number > max) max = row.alias_number;
       }
 
-      // alias がまだ無い client_token にだけ新しい番号を振る
       const inserts: {
         course_code: string;
         client_token: string;
@@ -1121,7 +1098,6 @@ useEffect(() => {
         }
       });
 
-            // alias をまとめて挿入（重複しても落ちないように upsert）
       if (inserts.length > 0) {
         const { error: insertError } = await supabase
           .from('student_aliases')
@@ -1135,14 +1111,13 @@ useEffect(() => {
       }
 
       setAliasMap(map);
-
     };
 
     void run();
   }, [currentCourseCode, threads, calls]);
 
-  const handleSendReply = async (e: FormEvent) => {
-    e.preventDefault();
+  // ★ Enterで送信 / Shift+Enterで改行対応
+  const handleSendReply = async () => {
     if (!currentCourseCode || !selectedThreadToken) {
       showToast('返信するスレッドを選択してください');
       return;
@@ -1159,7 +1134,6 @@ useEffect(() => {
     const text = replyText.trim();
     const hasFile = !!replyAttachmentFile;
 
-    // テキストもファイルも無ければ何もしない
     if (!text && !hasFile) return;
 
     setReplyText('');
@@ -1168,7 +1142,6 @@ useEffect(() => {
     let attachmentType: string | null = null;
     let attachmentName: string | null = null;
 
-    // 添付ファイルがあれば先にアップロード
     if (replyAttachmentFile) {
       const file = replyAttachmentFile;
       const ext = file.name.split('.').pop() ?? 'bin';
@@ -1193,7 +1166,6 @@ useEffect(() => {
       attachmentName = file.name;
     }
 
-    // どの学生か紐づける（従来どおり）
     let studentUserId: string | null = null;
 
     const { data: baseMessage, error: findError } = await supabase
@@ -1239,7 +1211,6 @@ useEffect(() => {
       setMessages((prev) => [...prev, data as Message]);
     }
 
-    // フォームのファイルをクリア
     setReplyAttachmentFile(null);
     if (replyFileInputRef.current) {
       replyFileInputRef.current.value = '';
@@ -1315,7 +1286,7 @@ useEffect(() => {
       }}
     >
       {/* ヘッダー */}
-            <header
+      <header
         style={{
           padding: '10px 16px',
           background: '#ffffff',
@@ -1409,7 +1380,6 @@ useEffect(() => {
         </div>
       </header>
 
-
       {/* 本体 */}
       <div
         style={{
@@ -1471,7 +1441,7 @@ useEffect(() => {
                   まだメッセージがありません。
                 </div>
               ) : (
-                  sortedThreads.map((token) => {
+                sortedThreads.map((token) => {
                   const lastMessage = messages
                     .filter((m) => m.client_token === token)
                     .slice(-1)[0];
@@ -1492,7 +1462,6 @@ useEffect(() => {
                     : '匿名さん';
                   const isPinned = !!threadPins[token];
 
-                  // 未読件数: 「SA既読より新しい学生メッセージ」の数
                   const saLastRead = saReadMap[token] ?? null;
                   const unreadCount = messages.reduce((count, m) => {
                     if (m.client_token !== token) return count;
@@ -1512,7 +1481,6 @@ useEffect(() => {
                         marginBottom: 6,
                       }}
                     >
-                      {/* カード全体をクリックで選択 */}
                       <button
                         type="button"
                         onClick={() =>
@@ -1554,7 +1522,6 @@ useEffect(() => {
                             {displayName}
                           </div>
 
-                          {/* ピンボタン（button の中に button は入れられないので span にする） */}
                           <span
                             onClick={(e) => {
                               e.stopPropagation();
@@ -1681,7 +1648,6 @@ useEffect(() => {
                 </span>
 
                 <div style={{ display: 'flex', gap: 6 }}>
-                  {/* 担当するボタン（担当者がいないときだけ） */}
                   {!selectedLock && (
                     <button
                       type="button"
@@ -1701,7 +1667,6 @@ useEffect(() => {
                     </button>
                   )}
 
-                  {/* 担当解除ボタン（自分が担当のときだけ） */}
                   {isLockedByMe && (
                     <button
                       type="button"
@@ -1773,13 +1738,15 @@ useEffect(() => {
                     !!selectedStudentReadAt &&
                     !!m.created_at &&
                     m.created_at <= selectedStudentReadAt;
-                  // 親メッセージ（リプライ元）を探す
+
                   const parentMessage =
                     m.parent_message_id != null
                       ? messages.find(
-                          (pm) => String(pm.id) === String(m.parent_message_id)
-                    )
-                  : undefined;
+                          (pm) =>
+                            String(pm.id) === String(m.parent_message_id)
+                        )
+                      : undefined;
+
                   return (
                     <div
                       key={String(m.id)}
@@ -1798,10 +1765,10 @@ useEffect(() => {
                       >
                         <div
                           style={{
-                          fontSize: 10,
-                          color: '#6b7280',
-                          marginBottom: 2,
-                        }}
+                            fontSize: 10,
+                            color: '#6b7280',
+                            marginBottom: 2,
+                          }}
                         >
                           {senderLabel}
                         </div>
@@ -1820,39 +1787,44 @@ useEffect(() => {
                             textAlign: 'left',
                           }}
                         >
-                           {/*リプライ元の引用 */}
-                            {parentMessage && (
+                          {/* リプライ元の引用 */}
+                          {parentMessage && (
                             <div
-                            style={{
-                            marginBottom: m.body || m.attachment_url ? 6 : 0,
-                            padding: '4px 6px',
-                            borderRadius: 8,
-                            borderLeft: mine ? '2px solid #9ca3af' : '2px solid #d1d5db',
-                            background: mine ? 'rgba(31,41,55,0.6)' : '#f3f4f6',
-                            fontSize: 11,
-                            }}
+                              style={{
+                                marginBottom:
+                                  m.body || m.attachment_url ? 6 : 0,
+                                padding: '4px 6px',
+                                borderRadius: 8,
+                                borderLeft: mine
+                                  ? '2px solid #9ca3af'
+                                  : '2px solid #d1d5db',
+                                background: mine
+                                  ? 'rgba(31,41,55,0.6)'
+                                  : '#f3f4f6',
+                                fontSize: 11,
+                              }}
                             >
-                          <div
-                          style={{
-                          fontWeight: 600,
-                          marginBottom: 2,
-                          }}
-                          >
-                          {getSenderLabel(parentMessage)}
-                          </div>
-                          <div
-                          style={{
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          }}
-                          >
-                          {getMessagePreview(parentMessage)}
-                          </div>
-                          </div>
+                              <div
+                                style={{
+                                  fontWeight: 600,
+                                  marginBottom: 2,
+                                }}
+                              >
+                                {getSenderLabel(parentMessage)}
+                              </div>
+                              <div
+                                style={{
+                                  whiteSpace: 'nowrap',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                }}
+                              >
+                                {getMessagePreview(parentMessage)}
+                              </div>
+                            </div>
                           )}
 
-                          {/* 元の本文や添付の描画 */}
+                          {/* 元の本文や添付 */}
                           {m.body && <div>{m.body}</div>}
 
                           {m.attachment_url && (
@@ -1885,27 +1857,27 @@ useEffect(() => {
                         </div>
                       </div>
                       <div
-                      style={{
-                      display: 'flex',
-                      justifyContent: mine ? 'flex-end' : 'flex-start',
-                      maxWidth: 360,
-                      }}
+                        style={{
+                          display: 'flex',
+                          justifyContent: mine ? 'flex-end' : 'flex-start',
+                          maxWidth: 360,
+                        }}
                       >
-                      <button
-                      type="button"
-                      onClick={() => setReplyTarget(m)}
-                      style={{
-                      marginTop: 2,
-                      border: 'none',
-                      background: 'transparent',
-                      fontSize: 10,
-                      color: '#6b7280',
-                      cursor: 'pointer',
-                      padding: 0,
-                      }}
-                      >
-                        ↪ 
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => setReplyTarget(m)}
+                          style={{
+                            marginTop: 2,
+                            border: 'none',
+                            background: 'transparent',
+                            fontSize: 10,
+                            color: '#6b7280',
+                            cursor: 'pointer',
+                            padding: 0,
+                          }}
+                        >
+                          ↪
+                        </button>
                       </div>
                       <div
                         style={{
@@ -1936,7 +1908,10 @@ useEffect(() => {
 
             {/* 返信フォーム */}
             <form
-              onSubmit={handleSendReply}
+              onSubmit={(e) => {
+                e.preventDefault();
+                void handleSendReply();
+              }}
               style={{
                 borderTop: '1px solid #e5e7eb',
                 padding: '8px 10px',
@@ -1955,68 +1930,76 @@ useEffect(() => {
                 }}
               >
                 {replyTarget && (
-                <div
-                style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 8,
-                padding: '4px 8px',
-                borderRadius: 8,
-                background: '#e5e7eb',
-                }}
-                >
-                <div
-                style={{
-                flex: 1,
-                overflow: 'hidden',
-                }}
-                >
-                <div
-                style={{
-                fontSize: 10,
-                color: '#4b5563',
-                marginBottom: 2,
-                }}
-                >
-                返信先：{getSenderLabel(replyTarget)}
-                </div>
-                <div
-                style={{
-                fontSize: 11,
-                color: '#111827',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                }}
-                >
-                {getMessagePreview(replyTarget)}
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      padding: '4px 8px',
+                      borderRadius: 8,
+                      background: '#e5e7eb',
+                    }}
+                  >
+                    <div
+                      style={{
+                        flex: 1,
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: 10,
+                          color: '#4b5563',
+                          marginBottom: 2,
+                        }}
+                      >
+                        返信先：{getSenderLabel(replyTarget)}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 11,
+                          color: '#111827',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
+                        {getMessagePreview(replyTarget)}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setReplyTarget(null)}
+                      style={{
+                        border: 'none',
+                        background: 'transparent',
+                        fontSize: 14,
+                        cursor: 'pointer',
+                        padding: 2,
+                        color: '#6b7280',
+                      }}
+                    >
+                      ×
+                    </button>
                   </div>
-                </div>
-                <button
-                type="button"
-                onClick={() => setReplyTarget(null)}
-                style={{
-                border: 'none',
-                background: 'transparent',
-                fontSize: 14,
-                cursor: 'pointer',
-                padding: 2,
-                color: '#6b7280',
-                }}
-                >
-                ×
-                </button>
-                </div>
                 )}
                 <textarea
                   value={replyText}
                   onChange={(e) => setReplyText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      void handleSendReply();
+                    }
+                  }}
                   placeholder={
                     !selectedThreadToken
                       ? 'スレッドを選択してください'
                       : selectedLock && !isLockedByMe
-                      ? `${selectedLock.sa_name ?? '他のSA'} が回答中のため、編集できません`
+                      ? `${
+                          selectedLock.sa_name ?? '他のSA'
+                        } が回答中のため、編集できません`
                       : 'ここに返信内容を入力'
                   }
                   disabled={
@@ -2191,7 +2174,7 @@ useEffect(() => {
         </div>
       </div>
 
-            {/* 個人設定パネル */}
+      {/* 個人設定パネル */}
       {showSettingsPanel && (
         <div
           onClick={(e) => {
@@ -2296,7 +2279,7 @@ useEffect(() => {
                 fontWeight: 600,
                 cursor: loggingOut ? 'default' : 'pointer',
                 background: 'transparent',
-                color: '#ef4444', // 👈 赤文字
+                color: '#ef4444',
                 textAlign: 'left',
               }}
             >
@@ -2323,7 +2306,6 @@ useEffect(() => {
           </div>
         </div>
       )}
-
 
       {/* 呼び出し対応確認モーダル */}
       {confirmClientToken && (
@@ -2438,6 +2420,7 @@ useEffect(() => {
     </div>
   );
 }
+
 export default function SaDashboardPage() {
   return (
     <Suspense

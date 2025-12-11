@@ -2,7 +2,7 @@
 /* eslint-disable react-hooks/set-state-in-effect, @next/next/no-img-element */
 'use client';
 
-import { useEffect, useMemo, useState, FormEvent, useRef } from 'react';
+import { useEffect, useMemo, useState,  useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 
@@ -129,14 +129,14 @@ export default function StudentCoursePage() {
       setStudentUserId(uid);
 
       const meta = (data.user.user_metadata ?? {}) as {
-  name?: string;
-  full_name?: string;
-};
-const displayName =
-  meta.name ||
-  meta.full_name ||
-  data.user.email ||
-  'ログイン中ユーザー';
+        name?: string;
+        full_name?: string;
+      };
+      const displayName =
+        meta.name ||
+        meta.full_name ||
+        data.user.email ||
+        'ログイン中ユーザー';
 
       setUserDisplayName(displayName);
 
@@ -332,8 +332,8 @@ const displayName =
     bottomRef.current.scrollIntoView({ behavior: 'auto' });
   }, [loading, messages.length, courseCode]);
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  // ★ Enter で送信するように変更（Shift+Enter は改行）
+  const handleSubmit = async () => {
     const text = input.trim();
     const hasFile = !!attachmentFile;
 
@@ -913,7 +913,10 @@ const displayName =
 
             {/* 入力フォーム（返信プレビュー込み） */}
             <form
-              onSubmit={handleSubmit}
+              onSubmit={(e) => {
+                e.preventDefault();
+                void handleSubmit();
+              }}
               style={{
                 display: 'flex',
                 gap: 8,
@@ -989,6 +992,12 @@ const displayName =
                 <textarea
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      void handleSubmit();
+                    }
+                  }}
                   placeholder="ここに質問を入力（匿名）"
                   style={{
                     flex: 1,
